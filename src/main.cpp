@@ -1,75 +1,121 @@
-#include <Arduino.h>
+#include "main.h"
 
-// Define Input Connections
-#define CH1 34
-#define CH2 35
-#define CH3 4
-#define CH4 25
-#define CH5 32
-#define CH6 33
+BluetoothSerial SerialBT;
+DCMotor VSRC_Motor;
+Servo_Motor VSRC_Servo;
 
-// Integers to represent values from sticks and pots
-int ch1Value;
-int ch2Value;
-int ch3Value;
-int ch4Value; 
-int ch5Value;
+TimerHandle_t xTimers[4];
+unsigned long count = 0;
+char cmd;
 
-// Boolean to represent switch value
-bool ch6Value;
+void timerCallBack(TimerHandle_t xTimer){
+    configASSERT(xTimer);
+    int ulCount = (uint32_t) pvTimerGetTimerID(xTimer);
 
-// Read the number of a specified channel and convert to the range provided.
-// If the channel is off, return the default value
-int readChannel(int channelInput, int minLimit, int maxLimit, int defaultValue){
-  int ch = pulseIn(channelInput, HIGH, 30000);
-  if (ch < 100) return defaultValue;
-  return map(ch, 1000, 2000, minLimit, maxLimit);
+    // read data thru bluetooth
+    if(ulCount==0){
+      if (SerialBT.available()) {
+        cmd = SerialBT.read();
+        // Serial.print(cmd);
+        // Serial.print(" ");
+        }
+      
+    }
+
+    //timer 2 acceleration pwm for motors
+    if(ulCount == 1){
+        if(running == 1){
+            if(applied_pwm < MAX_PWM){
+                applied_pwm += 200;
+            }
+            else{
+                applied_pwm = MAX_PWM;
+            }
+        }
+        else{
+            applied_pwm = 0;
+        }
+    }
 }
 
-// Read the switch channel and return a boolean value
-bool readSwitch(byte channelInput, bool defaultValue){
-  int intDefaultValue = (defaultValue)? 100: 0;
-  int ch = readChannel(channelInput, 0, 100, intDefaultValue);
-  return (ch > 50);
-}
+void setup() {
+  Serial.begin(9600); Serial.println("Successfully initiated.");
+  SerialBT.begin("VSRC23");
+  VSRC_Motor.Init();
+  // VSRC_Servo.Init(); 
 
-void setup(){
-  // Set up serial monitor
-  Serial.begin(9600);
-  
-  // Set all pins as inputs
-  pinMode(CH1, INPUT);
-  pinMode(CH2, INPUT);
-  pinMode(CH3, INPUT);
-  pinMode(CH4, INPUT);
-  pinMode(CH5, INPUT);
-  pinMode(CH6, INPUT);
-}
+  // Create Timer
+  xTimers[ 0 ] = xTimerCreate("Timer BLE",pdMS_TO_TICKS(50),pdTRUE,( void * ) 0, timerCallBack);
+  xTimerStart(xTimers[0],0);
 
+  xTimers[ 1 ] = xTimerCreate("Timer acceleration",pdMS_TO_TICKS(500),pdTRUE,( void * ) 1, timerCallBack);
+  xTimerStart(xTimers[1],0);
+}
 
 void loop() {
+  switch (cmd) {
+    case BTforward: forward();
+      Serial.print("moving forward (left, right): "); Serial.print(pwm_left, DEC); Serial.print(","); Serial.println(pwm_right, DEC);
+      delay(50);
+      break;
+    case BTback: backward();
+      Serial.print("moving backward (left, right): "); Serial.print(pwm_left, DEC); Serial.print(","); Serial.println(pwm_right, DEC);
+      delay(50);
+      break;
+    case BTleft: left();
+      Serial.print("turning left (-left, right): "); Serial.print(pwm_left, DEC); Serial.print(","); Serial.println(pwm_right, DEC);
+      delay(50);
+      break;
+    case BTright: right();
+      Serial.print("turning right (left, -right): "); Serial.print(pwm_left, DEC); Serial.print(","); Serial.println(pwm_right, DEC);
+      delay(50);
+      break;
+    default: case BTstop: idle();
+      Serial.println("idling..");
+      delay(50);
+      break;
+  }
   
-  // Get values for each channel
-  ch1Value = readChannel(CH1, -100, 100, 0);
-  ch2Value = readChannel(CH2, -100, 100, 0);
-  ch3Value = readChannel(CH3, -100, 100, -100);
-  ch4Value = readChannel(CH4, -100, 100, 0);
-  ch5Value = readChannel(CH5, -100, 100, 0);
-  ch6Value = readSwitch(CH6, false);
-  
-  // Print to Serial Monitor
-  Serial.print("Ch1: ");
-  Serial.print(ch1Value);
-  Serial.print(" | Ch2: ");
-  Serial.print(ch2Value);
-  Serial.print(" | Ch3: ");
-  Serial.print(ch3Value);
-  Serial.print(" | Ch4: ");
-  Serial.print(ch4Value);
-  Serial.print(" | Ch5: ");
-  Serial.print(ch5Value);
-  Serial.print(" | Ch6: ");
-  Serial.println(ch6Value);
-  
-  delay(5);
+  VSRC_Motor.Run(RIGHT_MOTOR, pwm_right, dir_right);
+  VSRC_Motor.Run(LEFT_MOTOR, pwm_left, dir_left);
+}
+
+void forward() {
+    running = 1;
+    pwm_left  = (int16_t) applied_pwm;
+    pwm_right = (int16_t) applied_pwm;
+    dir_left  = 0; // cw
+    dir_right = 0; // cw
+}
+
+void backward() {
+    running = 1;
+    pwm_left  = (int16_t) applied_pwm;
+    pwm_right = (int16_t) applied_pwm;
+    dir_left  = 1; // ccw
+    dir_right = 1; // ccw
+}
+
+void left() {
+    running = 1;
+    pwm_left  = (int16_t) applied_pwm;
+    pwm_right = (int16_t) applied_pwm;
+    dir_left  = 1; // ccw
+    dir_right = 0; // cw
+}
+
+void right() {
+    running = 1;
+    pwm_left  = (int16_t) applied_pwm;
+    pwm_right = (int16_t) applied_pwm;
+    dir_left  = 0; // cw
+    dir_right = 1; // ccw
+}
+
+void idle() {
+    running = 0;
+    pwm_left = (int16_t) 0;
+    pwm_right = (int16_t) 0;
+    dir_left = 0;
+    dir_right = 0;
 }
